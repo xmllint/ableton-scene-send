@@ -903,14 +903,20 @@ var initialize = (context, apiVersion) => {
 // src/extension.ts
 var cueRegistry = /* @__PURE__ */ new Map();
 function activate(activation) {
+  console.log("[SceneSend] activate() called");
   setTimeout(() => {
+    console.log("[SceneSend] Deferred init starting");
     try {
       cueRegistry.clear();
       const context = initialize(activation, "1.0.0");
       const song = context.application.song;
-      const namedCues = song.cuePoints.filter(
+      console.log("[SceneSend] Song resolved");
+      const allCues = song.cuePoints;
+      console.log(`[SceneSend] Total locators: ${allCues.length}`);
+      const namedCues = allCues.filter(
         (c) => c.name.trim().length > 0
       );
+      console.log(`[SceneSend] Named locators: ${namedCues.length}`);
       if (namedCues.length === 0) {
         console.warn(
           "[SceneSend] No named locators found. Add some in Arrangement then restart the extension (or reload Live)."
@@ -920,12 +926,16 @@ function activate(activation) {
       }
       for (const cue of namedCues) {
         const cueName = cue.name.trim();
+        const cueTime = cue.time;
         const cmdId = `sceneSend.${cue.handle.id}`;
         const label = `\u25B6 Send to \xAB${cueName}\xBB`;
-        cueRegistry.set(cmdId, { time: cue.time, name: cueName });
+        console.log(
+          `[SceneSend] Registering: "${label}" \u2192 cmd=${cmdId} time=${cueTime.toFixed(1)}`
+        );
+        cueRegistry.set(cmdId, { time: cueTime, name: cueName });
         context.ui.registerContextMenuAction("Scene", label, cmdId).catch(
           (err) => console.error(
-            `[SceneSend] Failed to register menu for \xAB${cueName}\xBB:`,
+            `[SceneSend] Menu FAILED for \xAB${cueName}\xBB:`,
             err
           )
         );
@@ -937,10 +947,18 @@ function activate(activation) {
               console.error(`[SceneSend] Unknown command: ${cmdId}`);
               return;
             }
+            console.log(
+              `[SceneSend] >>> TRIGGER: Send to \xAB${entry.name}\xBB @ ${entry.time.toFixed(1)} beats <<<`
+            );
             try {
+              console.log("[SceneSend] Resolving scene handle...");
               const scene = context.getObjectFromHandle(handle, Scene);
+              console.log(`[SceneSend] Scene resolved, name="${scene.name}"`);
               const sceneIndex = song.scenes.findIndex(
                 (s) => s.handle.id === scene.handle.id
+              );
+              console.log(
+                `[SceneSend] Scene index=${sceneIndex} (of ${song.scenes.length} total scenes)`
               );
               if (sceneIndex < 0) {
                 console.error("[SceneSend] Scene not found in song");
@@ -948,39 +966,84 @@ function activate(activation) {
               }
               const targetBeat = entry.time;
               let copiedCount = 0;
+              let skippedNoSlot = 0;
+              let skippedEmpty = 0;
+              let skippedTypeMismatch = 0;
+              console.log(
+                `[SceneSend] Walking ${song.tracks.length} tracks at scene index ${sceneIndex}...`
+              );
               for (const track of song.tracks) {
+                const trackName = track.name;
                 try {
                   const slot = track.clipSlots[sceneIndex];
-                  if (!slot) continue;
+                  if (!slot) {
+                    console.log(
+                      `[SceneSend]   SKIP "${trackName}": no clip slot`
+                    );
+                    skippedNoSlot++;
+                    continue;
+                  }
                   const clip = slot.clip;
-                  if (!clip) continue;
+                  if (!clip) {
+                    console.log(
+                      `[SceneSend]   SKIP "${trackName}": empty slot`
+                    );
+                    skippedEmpty++;
+                    continue;
+                  }
+                  const clipName = clip.name || "(unnamed)";
                   if (clip instanceof MidiClip && track instanceof MidiTrack) {
-                    await copyMidiToArrangement(clip, track, targetBeat);
+                    console.log(
+                      `[SceneSend]   MIDI "${trackName}" / "${clipName}" \u2192 copying...`
+                    );
+                    await copyMidiToArrangement(
+                      clip,
+                      track,
+                      targetBeat
+                    );
                     copiedCount++;
+                    console.log(
+                      `[SceneSend]   MIDI "${trackName}" / "${clipName}" \u2713`
+                    );
                   } else if (clip instanceof AudioClip && track instanceof AudioTrack) {
-                    await copyAudioToArrangement(clip, track, targetBeat);
+                    console.log(
+                      `[SceneSend]   AUDIO "${trackName}" / "${clipName}" \u2192 copying...`
+                    );
+                    await copyAudioToArrangement(
+                      clip,
+                      track,
+                      targetBeat
+                    );
                     copiedCount++;
+                    console.log(
+                      `[SceneSend]   AUDIO "${trackName}" / "${clipName}" \u2713`
+                    );
+                  } else {
+                    console.log(
+                      `[SceneSend]   SKIP "${trackName}": type mismatch (clip type != track type)`
+                    );
+                    skippedTypeMismatch++;
                   }
                 } catch (err) {
                   console.error(
-                    `[SceneSend] Failed on track "${track.name}":`,
+                    `[SceneSend]   ERROR on track "${trackName}":`,
                     err
                   );
                 }
               }
               console.log(
-                `[SceneSend] Scene \u2192 \xAB${entry.name}\xBB: ${copiedCount} clip${copiedCount === 1 ? "" : "s"} copied @ ${targetBeat.toFixed(1)} beats`
+                `[SceneSend] <<< DONE: ${copiedCount} copied, ${skippedNoSlot} no-slot, ${skippedEmpty} empty, ${skippedTypeMismatch} type-mismatch >>>`
               );
             } catch (err) {
-              console.error("[SceneSend] Failed:", err);
+              console.error("[SceneSend] FATAL:", err);
             }
           })(arg).catch(
-            (err) => console.error("[SceneSend] Unhandled:", err)
+            (err) => console.error("[SceneSend] Unhandled rejection:", err)
           )
         );
       }
       console.log(
-        `[SceneSend] Ready \u2014 ${cueRegistry.size} cue point${cueRegistry.size === 1 ? "" : "s"}`
+        `[SceneSend] Ready \u2014 ${cueRegistry.size} cue point${cueRegistry.size === 1 ? "" : "s"} registered`
       );
     } catch (err) {
       console.error("[SceneSend] activate() crashed:", err);
@@ -991,16 +1054,24 @@ async function copyMidiToArrangement(clip, track, targetBeat) {
   const notes = clip.notes;
   const name = clip.name;
   const color = clip.color;
+  const noteStarts = notes.map((n) => n.startTime);
   const noteEnds = notes.map((n) => n.startTime + n.duration);
-  const maxNoteEnd = noteEnds.length > 0 ? Math.max(...noteEnds) : 0;
-  const duration = clip.duration > 0 ? Math.max(clip.duration, maxNoteEnd) : maxNoteEnd || 4;
+  const minStart = noteStarts.length > 0 ? Math.min(...noteStarts) : 0;
+  const maxEnd = noteEnds.length > 0 ? Math.max(...noteEnds) : 0;
+  const duration = clip.duration > 0 ? Math.max(clip.duration, maxEnd) : maxEnd || 4;
   console.log(
-    `[SceneSend] MIDI: track="${track.name}" start=${targetBeat} clipDur=${clip.duration} derived=${duration.toFixed(1)} notes=${notes.length}`
+    `[SceneSend]     clip.duration=${clip.duration} derived=${duration.toFixed(1)} notes=${notes.length} noteRange=[${minStart.toFixed(1)}\u2013${maxEnd.toFixed(1)}]`
+  );
+  console.log(
+    `[SceneSend]     \u2192 createMidiClip(start=${targetBeat}, dur=${duration.toFixed(1)})`
   );
   const newClip = await track.createMidiClip(targetBeat, duration);
+  console.log(`[SceneSend]     createMidiClip \u2713`);
   newClip.name = name;
   newClip.color = color;
+  console.log(`[SceneSend]     \u2192 set notes (${notes.length} notes)`);
   newClip.notes = notes;
+  console.log(`[SceneSend]     set notes \u2713`);
 }
 async function copyAudioToArrangement(clip, track, targetBeat) {
   const filePath = clip.filePath;
@@ -1010,7 +1081,10 @@ async function copyAudioToArrangement(clip, track, targetBeat) {
   const warpMode = clip.warpMode;
   const duration = clip.duration > 0 ? clip.duration : 4;
   console.log(
-    `[SceneSend] Audio: track="${track.name}" path="${filePath}" start=${targetBeat} dur=${duration}`
+    `[SceneSend]     filePath="${filePath}" clip.dur=${clip.duration} using=${duration} warping=${warping} warpMode=${warpMode}`
+  );
+  console.log(
+    `[SceneSend]     \u2192 createAudioClip(start=${targetBeat}, dur=${duration})`
   );
   const newClip = await track.createAudioClip({
     filePath,
@@ -1018,9 +1092,11 @@ async function copyAudioToArrangement(clip, track, targetBeat) {
     duration,
     isWarped: warping
   });
+  console.log(`[SceneSend]     createAudioClip \u2713`);
   newClip.name = name;
   newClip.color = color;
   newClip.warpMode = warpMode;
+  console.log(`[SceneSend]     name/color/warpMode set \u2713`);
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

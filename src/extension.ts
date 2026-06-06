@@ -20,18 +20,26 @@ import {
 const cueRegistry = new Map<string, { time: number; name: string }>();
 
 export function activate(activation: ActivationContext) {
+  console.log("[SceneSend] activate() called");
+
   // Defer for .ablx startup safety
   setTimeout(() => {
+    console.log("[SceneSend] Deferred init starting");
     try {
       cueRegistry.clear();
 
       const context = initialize(activation, "1.0.0");
       const song = context.application.song;
+      console.log("[SceneSend] Song resolved");
 
       // ── Enumerate named cue points ────────────────────
-      const namedCues = song.cuePoints.filter(
+      const allCues = song.cuePoints;
+      console.log(`[SceneSend] Total locators: ${allCues.length}`);
+
+      const namedCues = allCues.filter(
         (c) => c.name.trim().length > 0,
       );
+      console.log(`[SceneSend] Named locators: ${namedCues.length}`);
 
       if (namedCues.length === 0) {
         console.warn(
@@ -44,17 +52,22 @@ export function activate(activation: ActivationContext) {
 
       for (const cue of namedCues) {
         const cueName = cue.name.trim();
+        const cueTime = cue.time;
         const cmdId = `sceneSend.${cue.handle.id}`;
         const label = `▶ Send to «${cueName}»`;
 
-        cueRegistry.set(cmdId, { time: cue.time, name: cueName });
+        console.log(
+          `[SceneSend] Registering: "${label}" → cmd=${cmdId} ` +
+          `time=${cueTime.toFixed(1)}`,
+        );
 
-        // Register menu action — log if IPC round-trip fails
+        cueRegistry.set(cmdId, { time: cueTime, name: cueName });
+
         context.ui
           .registerContextMenuAction("Scene", label, cmdId)
           .catch((err) =>
             console.error(
-              `[SceneSend] Failed to register menu for «${cueName}»:`, err,
+              `[SceneSend] Menu FAILED for «${cueName}»:`, err,
             ),
           );
 
@@ -66,12 +79,25 @@ export function activate(activation: ActivationContext) {
               return;
             }
 
+            console.log(
+              `[SceneSend] >>> TRIGGER: Send to «${entry.name}» ` +
+              `@ ${entry.time.toFixed(1)} beats <<<`,
+            );
+
             try {
               // 1. Resolve the Scene and find its index
+              console.log("[SceneSend] Resolving scene handle...");
               const scene = context.getObjectFromHandle(handle, Scene);
+              console.log(`[SceneSend] Scene resolved, name="${scene.name}"`);
+
               const sceneIndex = song.scenes.findIndex(
                 (s) => s.handle.id === scene.handle.id,
               );
+              console.log(
+                `[SceneSend] Scene index=${sceneIndex} ` +
+                `(of ${song.scenes.length} total scenes)`,
+              );
+
               if (sceneIndex < 0) {
                 console.error("[SceneSend] Scene not found in song");
                 return;
@@ -79,50 +105,100 @@ export function activate(activation: ActivationContext) {
 
               const targetBeat = entry.time;
               let copiedCount = 0;
+              let skippedNoSlot = 0;
+              let skippedEmpty = 0;
+              let skippedTypeMismatch = 0;
+
+              console.log(
+                `[SceneSend] Walking ${song.tracks.length} tracks ` +
+                `at scene index ${sceneIndex}...`,
+              );
 
               // 2. Copy all clips — sequential to avoid IPC contention
               for (const track of song.tracks) {
+                const trackName = track.name;
                 try {
                   const slot = track.clipSlots[sceneIndex];
-                  if (!slot) continue;
+                  if (!slot) {
+                    console.log(
+                      `[SceneSend]   SKIP "${trackName}": no clip slot`,
+                    );
+                    skippedNoSlot++;
+                    continue;
+                  }
 
                   const clip = slot.clip;
-                  if (!clip) continue;
+                  if (!clip) {
+                    console.log(
+                      `[SceneSend]   SKIP "${trackName}": empty slot`,
+                    );
+                    skippedEmpty++;
+                    continue;
+                  }
 
-                  if (clip instanceof MidiClip && track instanceof MidiTrack) {
-                    await copyMidiToArrangement(clip, track, targetBeat);
+                  const clipName = clip.name || "(unnamed)";
+
+                  if (
+                    clip instanceof MidiClip &&
+                    track instanceof MidiTrack
+                  ) {
+                    console.log(
+                      `[SceneSend]   MIDI "${trackName}" / "${clipName}" → ` +
+                      `copying...`,
+                    );
+                    await copyMidiToArrangement(
+                      clip, track, targetBeat,
+                    );
                     copiedCount++;
+                    console.log(
+                      `[SceneSend]   MIDI "${trackName}" / "${clipName}" ✓`,
+                    );
                   } else if (
                     clip instanceof AudioClip &&
                     track instanceof AudioTrack
                   ) {
-                    await copyAudioToArrangement(clip, track, targetBeat);
+                    console.log(
+                      `[SceneSend]   AUDIO "${trackName}" / "${clipName}" → ` +
+                      `copying...`,
+                    );
+                    await copyAudioToArrangement(
+                      clip, track, targetBeat,
+                    );
                     copiedCount++;
+                    console.log(
+                      `[SceneSend]   AUDIO "${trackName}" / "${clipName}" ✓`,
+                    );
+                  } else {
+                    console.log(
+                      `[SceneSend]   SKIP "${trackName}": ` +
+                      `type mismatch (clip type != track type)`,
+                    );
+                    skippedTypeMismatch++;
                   }
                 } catch (err) {
                   console.error(
-                    `[SceneSend] Failed on track "${track.name}":`, err,
+                    `[SceneSend]   ERROR on track "${trackName}":`, err,
                   );
                 }
               }
 
               console.log(
-                `[SceneSend] Scene → «${entry.name}»: ` +
-                `${copiedCount} clip${copiedCount === 1 ? "" : "s"} ` +
-                `copied @ ${targetBeat.toFixed(1)} beats`,
+                `[SceneSend] <<< DONE: ${copiedCount} copied, ` +
+                `${skippedNoSlot} no-slot, ${skippedEmpty} empty, ` +
+                `${skippedTypeMismatch} type-mismatch >>>`,
               );
             } catch (err) {
-              console.error("[SceneSend] Failed:", err);
+              console.error("[SceneSend] FATAL:", err);
             }
           })(arg as Handle).catch((err) =>
-            console.error("[SceneSend] Unhandled:", err),
+            console.error("[SceneSend] Unhandled rejection:", err),
           ),
         );
       }
 
       console.log(
         `[SceneSend] Ready — ${cueRegistry.size} cue point` +
-        `${cueRegistry.size === 1 ? "" : "s"}`,
+        `${cueRegistry.size === 1 ? "" : "s"} registered`,
       );
     } catch (err) {
       console.error("[SceneSend] activate() crashed:", err);
@@ -140,25 +216,33 @@ async function copyMidiToArrangement(
   const name = clip.name;
   const color = clip.color;
 
-  // Session MIDI clips can be open-ended — clip.duration may return
-  // a large negative number. Derive the real length from note content.
+  const noteStarts = notes.map((n) => n.startTime);
   const noteEnds = notes.map((n) => n.startTime + n.duration);
-  const maxNoteEnd = noteEnds.length > 0 ? Math.max(...noteEnds) : 0;
+  const minStart = noteStarts.length > 0 ? Math.min(...noteStarts) : 0;
+  const maxEnd = noteEnds.length > 0 ? Math.max(...noteEnds) : 0;
+
   const duration =
     clip.duration > 0
-      ? Math.max(clip.duration, maxNoteEnd)
-      : maxNoteEnd || 4;
+      ? Math.max(clip.duration, maxEnd)
+      : maxEnd || 4;
 
   console.log(
-    `[SceneSend] MIDI: track="${track.name}" start=${targetBeat} ` +
-    `clipDur=${clip.duration} derived=${duration.toFixed(1)} ` +
-    `notes=${notes.length}`,
+    `[SceneSend]     clip.duration=${clip.duration} ` +
+    `derived=${duration.toFixed(1)} notes=${notes.length} ` +
+    `noteRange=[${minStart.toFixed(1)}–${maxEnd.toFixed(1)}]`,
   );
 
+  console.log(
+    `[SceneSend]     → createMidiClip(start=${targetBeat}, dur=${duration.toFixed(1)})`,
+  );
   const newClip = await track.createMidiClip(targetBeat, duration);
+  console.log(`[SceneSend]     createMidiClip ✓`);
+
   newClip.name = name;
   newClip.color = color;
+  console.log(`[SceneSend]     → set notes (${notes.length} notes)`);
   newClip.notes = notes;
+  console.log(`[SceneSend]     set notes ✓`);
 }
 
 // ── Audio: copy clip to arrangement ──
@@ -172,24 +256,27 @@ async function copyAudioToArrangement(
   const color = clip.color;
   const warping = clip.warping;
   const warpMode = clip.warpMode;
-
-  // Audio clips with negative duration (open-ended, or just never set)
-  // are safe to fall back to 1 bar — Live extends the clip to the
-  // sample's natural length automatically when warping is on.
   const duration = clip.duration > 0 ? clip.duration : 4;
 
   console.log(
-    `[SceneSend] Audio: track="${track.name}" ` +
-    `path="${filePath}" start=${targetBeat} dur=${duration}`,
+    `[SceneSend]     filePath="${filePath}" ` +
+    `clip.dur=${clip.duration} using=${duration} ` +
+    `warping=${warping} warpMode=${warpMode}`,
   );
 
+  console.log(
+    `[SceneSend]     → createAudioClip(start=${targetBeat}, dur=${duration})`,
+  );
   const newClip = await track.createAudioClip({
     filePath,
     startTime: targetBeat,
     duration,
     isWarped: warping,
   });
+  console.log(`[SceneSend]     createAudioClip ✓`);
+
   newClip.name = name;
   newClip.color = color;
   newClip.warpMode = warpMode;
+  console.log(`[SceneSend]     name/color/warpMode set ✓`);
 }
