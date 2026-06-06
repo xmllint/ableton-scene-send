@@ -13,8 +13,8 @@ that row into the Arrangement at a chosen locator. Session clips stay put.
 
 ## Install
 
-Drag `scene-send.ablx` onto Ableton Live 12 Beta. Developer Mode must be
-enabled in Preferences → Extensions.
+Drag `scene-send.ablx` onto Ableton Live 12 Beta.
+Developer Mode is only needed when building from source — turn it off for normal use.
 
 ## Usage
 
