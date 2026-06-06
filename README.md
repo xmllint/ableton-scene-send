@@ -18,7 +18,8 @@ enabled in Preferences → Extensions.
 
 ## Usage
 
-1. Add named locators in Arrangement View (Ctrl+K, type a name)
+1. **First:** install [ableton-cue-templates](https://github.com/xmllint/ableton-cue-templates)
+   to quickly drop genre-specific locators into your arrangement.
 2. Right-click any Scene row → **Send to «Chorus»**
 3. All clips in that row appear in Arrangement at the locator position
 
