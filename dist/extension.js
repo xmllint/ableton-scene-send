@@ -948,38 +948,26 @@ function activate(activation) {
               }
               const targetBeat = entry.time;
               let copiedCount = 0;
-              await context.withinTransaction(
-                () => Promise.all(
-                  song.tracks.map(async (track) => {
-                    try {
-                      const slot = track.clipSlots[sceneIndex];
-                      if (!slot) return;
-                      const clip = slot.clip;
-                      if (!clip) return;
-                      if (clip instanceof MidiClip && track instanceof MidiTrack) {
-                        await copyMidiToArrangement(
-                          clip,
-                          track,
-                          targetBeat
-                        );
-                        copiedCount++;
-                      } else if (clip instanceof AudioClip && track instanceof AudioTrack) {
-                        await copyAudioToArrangement(
-                          clip,
-                          track,
-                          targetBeat
-                        );
-                        copiedCount++;
-                      }
-                    } catch (err) {
-                      console.error(
-                        `[SceneSend] Failed on track "${track.name}":`,
-                        err
-                      );
-                    }
-                  })
-                )
-              );
+              for (const track of song.tracks) {
+                try {
+                  const slot = track.clipSlots[sceneIndex];
+                  if (!slot) continue;
+                  const clip = slot.clip;
+                  if (!clip) continue;
+                  if (clip instanceof MidiClip && track instanceof MidiTrack) {
+                    await copyMidiToArrangement(clip, track, targetBeat);
+                    copiedCount++;
+                  } else if (clip instanceof AudioClip && track instanceof AudioTrack) {
+                    await copyAudioToArrangement(clip, track, targetBeat);
+                    copiedCount++;
+                  }
+                } catch (err) {
+                  console.error(
+                    `[SceneSend] Failed on track "${track.name}":`,
+                    err
+                  );
+                }
+              }
               console.log(
                 `[SceneSend] Scene \u2192 \xAB${entry.name}\xBB: ${copiedCount} clip${copiedCount === 1 ? "" : "s"} copied @ ${targetBeat.toFixed(1)} beats`
               );

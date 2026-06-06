@@ -80,42 +80,31 @@ export function activate(activation: ActivationContext) {
               const targetBeat = entry.time;
               let copiedCount = 0;
 
-              // 2. Copy all clips in one undo step
-              await context.withinTransaction(() =>
-                Promise.all(
-                  song.tracks.map(async (track) => {
-                    try {
-                      const slot = track.clipSlots[sceneIndex];
-                      if (!slot) return;
+              // 2. Copy all clips — sequential to avoid IPC contention
+              for (const track of song.tracks) {
+                try {
+                  const slot = track.clipSlots[sceneIndex];
+                  if (!slot) continue;
 
-                      const clip = slot.clip;
-                      if (!clip) return;
+                  const clip = slot.clip;
+                  if (!clip) continue;
 
-                      if (
-                        clip instanceof MidiClip &&
-                        track instanceof MidiTrack
-                      ) {
-                        await copyMidiToArrangement(
-                          clip, track, targetBeat,
-                        );
-                        copiedCount++;
-                      } else if (
-                        clip instanceof AudioClip &&
-                        track instanceof AudioTrack
-                      ) {
-                        await copyAudioToArrangement(
-                          clip, track, targetBeat,
-                        );
-                        copiedCount++;
-                      }
-                    } catch (err) {
-                      console.error(
-                        `[SceneSend] Failed on track "${track.name}":`, err,
-                      );
-                    }
-                  }),
-                ),
-              );
+                  if (clip instanceof MidiClip && track instanceof MidiTrack) {
+                    await copyMidiToArrangement(clip, track, targetBeat);
+                    copiedCount++;
+                  } else if (
+                    clip instanceof AudioClip &&
+                    track instanceof AudioTrack
+                  ) {
+                    await copyAudioToArrangement(clip, track, targetBeat);
+                    copiedCount++;
+                  }
+                } catch (err) {
+                  console.error(
+                    `[SceneSend] Failed on track "${track.name}":`, err,
+                  );
+                }
+              }
 
               console.log(
                 `[SceneSend] Scene → «${entry.name}»: ` +
