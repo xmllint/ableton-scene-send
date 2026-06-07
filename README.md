@@ -4,7 +4,8 @@ Ableton Live 12 Extension — right-click any Scene row and copy every clip in
 that row into the Arrangement at a chosen locator. Session clips stay put.
 
 ![Right-click a Scene](screenshot-menu.png)
-![Result in Arrangement](screenshot-result.png)
+![Locator picker with loop/cut options](screenshot-modal.png)
+![Clips looped in Arrangement](screenshot-result.png)
 
 ## Features
 
